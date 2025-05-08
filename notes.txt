@@ -1,0 +1,1 @@
+toActivate  :  my_midterm_env\Scripts\activate
