@@ -19,6 +19,8 @@ import os
 import numpy as np
 import pandas as pd
 
+from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor
+
 from sklearn.model_selection import (
     train_test_split, GridSearchCV, RandomizedSearchCV, StratifiedKFold, KFold
 )
@@ -92,7 +94,7 @@ def is_classification(y_train):
     return len(np.unique(y_train)) <= 20 and np.issubdtype(y_train.dtype, np.integer)
 
 # Helper function to try and test different models
-def get_best_model(X_train, y_train, X_val, y_val):
+def get_best_model_small(X_train, y_train, X_val, y_val):
     if is_classification(y_train):
         # Classification models (with reduced search space)
         candidates = [
@@ -224,16 +226,113 @@ def get_best_model(X_train, y_train, X_val, y_val):
     best_model.fit(np.concatenate([X_train, X_val], axis=0), np.concatenate([y_train, y_val], axis=0))
 
     return best_model
-# Main function for model selection and prediction
+
+def get_best_model_large(X_train, y_train, X_val, y_val):
+    if is_classification(y_train):
+        candidates = [
+            {
+                "name": "LogisticRegression",
+                "model": Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('clf', LogisticRegression(max_iter=300, random_state=42))
+                ])
+            },
+            {
+                "name": "RandomForest",
+                "model": RandomForestClassifier(
+                    n_estimators=70,
+                    max_depth=6,
+                    min_samples_split=2,
+                    min_samples_leaf=1,
+                    random_state=42
+                )
+            },
+            {
+                "name": "XGBoost",
+                "model": XGBClassifier(
+                    use_label_encoder=False,
+                    eval_metric='logloss',
+                    random_state=42,
+                    n_estimators=60,
+                    max_depth=5,
+                    learning_rate=0.1,
+                    subsample=0.9,
+                    colsample_bytree=0.9,
+                    verbosity=0
+                )
+            }
+        ]
+        scoring = 'accuracy'
+    else:
+        candidates = [
+            {
+                "name": "LinearRegression",
+                "model": Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('reg', LinearRegression())
+                ])
+            },
+            {
+                "name": "RandomForest",
+                "model": RandomForestRegressor(
+                    n_estimators=70,
+                    max_depth=6,
+                    min_samples_split=2,
+                    min_samples_leaf=1,
+                    random_state=42
+                )
+            },
+            {
+                "name": "XGBoost",
+                "model": XGBRegressor(
+                    random_state=42,
+                    n_estimators=60,
+                    max_depth=5,
+                    learning_rate=0.1,
+                    subsample=0.9,
+                    colsample_bytree=0.9,
+                    verbosity=0
+                )
+            }
+        ]
+        scoring = 'neg_mean_squared_error'
+
+    best_model = None
+    best_score = -np.inf if scoring == 'neg_mean_squared_error' else -1
+    best_name = ""
+
+    cv = StratifiedKFold(n_splits=2) if is_classification(y_train) else KFold(n_splits=2)
+
+    for candidate in candidates:
+        model = candidate["model"]
+        model.fit(X_train, y_train)
+        val_preds = model.predict(X_val)
+        score = accuracy_score(y_val, val_preds) if is_classification(y_train) else -mean_squared_error(y_val, val_preds)
+
+        print(f"{candidate['name']} validation score: {score:.4f}")
+
+        if score > best_score:
+            best_score = score
+            best_model = model
+            best_name = candidate["name"]
+
+    print(f"\nSelected Model: {best_name}")
+    print("Validation score:", best_score)
+
+    best_model.fit(np.concatenate([X_train, X_val], axis=0), np.concatenate([y_train, y_val], axis=0))
+    return best_model
+
+
+
 def train_predict(X_train, y_train, X_test):
-    # Split for validation
     X_train_split, X_val, y_train_split, y_val = train_test_split(
         X_train, y_train, test_size=0.2, random_state=42)
 
-    # Get the best model after testing different models
-    best_model = get_best_model(X_train_split, y_train_split, X_val, y_val)
+    if len(X_train) < 5000:
+        best_model = get_best_model_small(X_train_split, y_train_split, X_val, y_val)
+    else:
+        best_model = get_best_model_large(X_train_split, y_train_split, X_val, y_val)
 
-    # Predict on test set
     return best_model.predict(X_test)
 
 if __name__ == '__main__':
